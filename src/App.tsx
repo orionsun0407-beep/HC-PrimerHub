@@ -25,6 +25,10 @@ const OWNER_EMAIL = import.meta.env.VITE_OWNER_EMAIL?.trim().toLowerCase() || ""
 const DEMO_USER: AppUser = { id: "00000000-0000-4000-8000-000000000001", email: "demo@primerhub.local" };
 const DEFAULT_ORDER: OrderDefaults = { spec: "2", tubes: "1", purification: "RPC", modification: "", delivery: "液体", notes: "" };
 
+function authRedirectUrl(): string {
+  return new URL(import.meta.env.BASE_URL, window.location.origin).toString();
+}
+
 const FIELD_LABELS: Record<TemplateField, string> = {
   id: "ID/序号", name: "引物名称", sequence: "序列", length: "长度/碱基数",
   spec: "合成规格", tubes: "分装管数", purification: "纯化方式",
@@ -64,7 +68,11 @@ function AuthScreen({ onDemo }: { onDemo: () => void }) {
     setMessage("");
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: authRedirectUrl() },
+        });
         if (error) throw error;
         setMessage("注册成功。请检查邮箱并完成验证后登录。 ");
       } else {
@@ -81,7 +89,7 @@ function AuthScreen({ onDemo }: { onDemo: () => void }) {
   async function resetPassword() {
     if (!supabase || !email) return;
     setBusy(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.href });
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: authRedirectUrl() });
     setMessage(error ? error.message : "密码重置邮件已发送。 ");
     setBusy(false);
   }
