@@ -94,6 +94,18 @@ function AuthScreen({ onDemo }: { onDemo: () => void }) {
     setBusy(false);
   }
 
+  async function resendVerification() {
+    if (!supabase || !email) return;
+    setBusy(true);
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email,
+      options: { emailRedirectTo: authRedirectUrl() },
+    });
+    setMessage(error ? error.message : "验证邮件已重新发送，请检查收件箱和垃圾邮件。 ");
+    setBusy(false);
+  }
+
   return (
     <main className="auth-shell">
       <section className="auth-brand">
@@ -118,6 +130,7 @@ function AuthScreen({ onDemo }: { onDemo: () => void }) {
             <label>密码<input type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
             <button className="primary wide" disabled={busy}>{busy && <LoaderCircle className="spin" />}{mode === "login" ? "登录 PrimerHub" : "创建账户"}</button>
             {mode === "login" && <button type="button" className="text-button" onClick={resetPassword}>忘记密码？</button>}
+            {mode === "signup" && <button type="button" className="text-button" onClick={resendVerification} disabled={busy || !email}>重新发送验证邮件</button>}
             {message && <p className="form-message">{message}</p>}
           </form>
         ) : (
