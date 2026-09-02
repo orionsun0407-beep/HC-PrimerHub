@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import type { Session, User } from "@supabase/supabase-js";
 import type { BindingContext, ImportedPrimer, OrderDefaults, OrderTemplate, PrimerRecord, TemplateField, TemplateMapping } from "./types";
+import biosuneTemplateUrl from "../outputs/system-default-template/铂尚引物合成订购单.xlsx?url";
 import { decodePrimerBuffer, parsePrimerText } from "./lib/primerText";
 import { parseSnapGeneBuffer } from "./lib/snapgene";
 import { findSequenceMatches, gcPercent, normalizeSequence, reverseComplement, scanRestrictionSites } from "./lib/sequence";
@@ -24,6 +25,24 @@ type AppUser = Pick<User, "id" | "email">;
 const OWNER_EMAIL = import.meta.env.VITE_OWNER_EMAIL?.trim().toLowerCase() || "";
 const DEMO_USER: AppUser = { id: "00000000-0000-4000-8000-000000000001", email: "demo@primerhub.local" };
 const DEFAULT_ORDER: OrderDefaults = { spec: "2", tubes: "1", purification: "RPC", modification: "", delivery: "液体", notes: "" };
+const DEFAULT_BIOSUNE_TEMPLATE: OrderTemplate = {
+  id: "system-biosune-default",
+  user_id: "system",
+  name: "铂尚（系统默认）",
+  file_name: "铂尚引物合成订购单.xlsx",
+  storage_path: `builtin:${biosuneTemplateUrl}`,
+  mapping: {
+    sheetName: "订单表",
+    headerRow: 11,
+    firstDataRow: 12,
+    capacity: 17,
+    columns: { id: 1, name: 2, sequence: 3, length: 4, spec: 5, tubes: 6, purification: 7, modification: 8, delivery: 9, notes: 10 },
+  },
+  defaults: DEFAULT_ORDER,
+  created_at: "2026-09-02T00:00:00.000Z",
+  updated_at: "2026-09-02T00:00:00.000Z",
+  system: true,
+};
 
 function authRedirectUrl(): string {
   return new URL(import.meta.env.BASE_URL, window.location.origin).toString();
@@ -429,10 +448,12 @@ function TemplateEditor({ file, initial, onCancel, onSaved, user }: { file: File
   const [mapping, setMapping] = useState(initial);
   const [defaults, setDefaults] = useState(DEFAULT_ORDER);
   const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
   const setColumn = (field: TemplateField, value: string) => setMapping({ ...mapping, columns: { ...mapping.columns, [field]: value ? Number(value) : undefined } });
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true);
+    event.preventDefault(); setBusy(true); setMessage("");
     try { await saveTemplate(user.id, { name, file_name: file.name, mapping, defaults }, file); await onSaved(); }
+    catch (error) { setMessage(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试。 "); }
     finally { setBusy(false); }
   }
   return (
@@ -441,7 +462,8 @@ function TemplateEditor({ file, initial, onCancel, onSaved, user }: { file: File
       <div className="template-meta"><label>模板名称<input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>工作表<input value={mapping.sheetName} onChange={(event) => setMapping({ ...mapping, sheetName: event.target.value })} required /></label><label>表头行<input type="number" min="1" value={mapping.headerRow} onChange={(event) => setMapping({ ...mapping, headerRow: Number(event.target.value) })} /></label><label>首条数据行<input type="number" min="1" value={mapping.firstDataRow} onChange={(event) => setMapping({ ...mapping, firstDataRow: Number(event.target.value) })} /></label><label>模板容量<input type="number" min="1" value={mapping.capacity} onChange={(event) => setMapping({ ...mapping, capacity: Number(event.target.value) })} /></label></div>
       <div className="mapping-grid">{(Object.keys(FIELD_LABELS) as TemplateField[]).map((field) => <label key={field}><span>{FIELD_LABELS[field]}{(field === "name" || field === "sequence") && <b>*</b>}</span><input type="number" min="1" max="100" value={mapping.columns[field] ?? ""} onChange={(event) => setColumn(field, event.target.value)} required={field === "name" || field === "sequence"} placeholder="未映射" /></label>)}</div>
       <h3>此模板的默认订购参数</h3><div className="template-meta"><label>规格<input value={defaults.spec} onChange={(e) => setDefaults({ ...defaults, spec: e.target.value })} /></label><label>管数<input value={defaults.tubes} onChange={(e) => setDefaults({ ...defaults, tubes: e.target.value })} /></label><label>纯化<input value={defaults.purification} onChange={(e) => setDefaults({ ...defaults, purification: e.target.value })} /></label><label>修饰<input value={defaults.modification} onChange={(e) => setDefaults({ ...defaults, modification: e.target.value })} /></label><label>交付<input value={defaults.delivery} onChange={(e) => setDefaults({ ...defaults, delivery: e.target.value })} /></label></div>
-      <button className="primary" disabled={busy}><Save />保存到私有模板库</button>
+      {message && <div className="status-banner error"><CircleAlert />{message}</div>}
+      <button className="primary" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : <Save />}{busy ? "正在保存…" : "保存到私有模板库"}</button>
     </form>
   );
 }
@@ -455,6 +477,7 @@ function TemplatesView({ templates, user, reload }: { templates: OrderTemplate[]
     catch (error) { setMessage(error instanceof Error ? error.message : "模板识别失败"); }
   }
   async function remove(item: OrderTemplate) {
+    if (item.system) return;
     if (!window.confirm(`删除模板“${item.name}”？`)) return;
     await removeTemplate(user.id, item); await reload();
   }
@@ -463,7 +486,7 @@ function TemplatesView({ templates, user, reload }: { templates: OrderTemplate[]
       {!draft && <label className="drop-zone compact"><input type="file" accept=".xlsx" onChange={(event) => selectFile(event.target.files?.[0])} /><FileSpreadsheet /><strong>上传新的 Excel 订单模板</strong><span>系统会寻找名称、序列、长度、规格、纯化等列</span></label>}
       {message && <div className="status-banner error"><CircleAlert />{message}</div>}
       {draft && <TemplateEditor file={draft.file} initial={draft.mapping} user={user} onCancel={() => setDraft(null)} onSaved={async () => { setDraft(null); await reload(); }} />}
-      <div className="template-list"><h2>已保存模板</h2>{templates.map((item) => <article key={item.id}><div className="file-icon"><FileSpreadsheet /></div><div><h3>{item.name}</h3><p>{item.file_name} · {item.mapping.sheetName} · 第 {item.mapping.firstDataRow} 行起</p></div><button className="icon-button danger" onClick={() => remove(item)}><Trash2 /></button></article>)}{!templates.length && <div className="empty-inline"><Archive />还没有保存模板。</div>}</div>
+      <div className="template-list"><h2>可用模板</h2>{templates.map((item) => <article className={item.system ? "system-template" : ""} key={item.id}><div className="file-icon"><FileSpreadsheet /></div><div><h3>{item.name}{item.system && <span className="tag green">所有用户默认</span>}</h3><p>{item.system ? "系统内置 · 无需上传 · 自动保持可用" : `${item.file_name} · ${item.mapping.sheetName} · 第 ${item.mapping.firstDataRow} 行起`}</p></div>{!item.system && <button className="icon-button danger" onClick={() => remove(item)}><Trash2 /></button>}</article>)}</div>
     </section>
   );
 }
@@ -542,6 +565,7 @@ export default function App() {
     { id: "library", label: "Primer 库", icon: Library }, { id: "order", label: "导入并下单", icon: FlaskConical },
     { id: "templates", label: "订单模板", icon: FileSpreadsheet }, { id: "backup", label: "备份与迁移", icon: Archive },
   ];
+  const availableTemplates = [DEFAULT_BIOSUNE_TEMPLATE, ...templates];
   return (
     <div className="app-shell">
       <aside className={menuOpen ? "open" : ""}><div className="side-brand"><div className="brand-mark"><Dna /></div><div><strong>HC PrimerHub</strong><span>PRIVATE WORKSPACE</span></div><button className="menu-close" onClick={() => setMenuOpen(false)}><X /></button></div>
@@ -550,8 +574,8 @@ export default function App() {
       </aside>
       <div className="app-main"><header className="mobile-header"><button onClick={() => setMenuOpen(true)}><Menu /></button><strong>HC PrimerHub</strong>{loading ? <LoaderCircle className="spin" /> : <Cloud />}</header>
         {tab === "library" && <LibraryView records={records} user={user} reload={reload} onReorder={(record) => { setReorderIds((ids) => ids.includes(record.id) ? ids : [...ids, record.id]); setTab("order"); }} />}
-        {tab === "order" && <OrderView records={records} templates={templates} user={user} reload={reload} reorderIds={reorderIds} onReorderIdsChange={setReorderIds} />}
-        {tab === "templates" && <TemplatesView templates={templates} user={user} reload={reload} />}
+        {tab === "order" && <OrderView records={records} templates={availableTemplates} user={user} reload={reload} reorderIds={reorderIds} onReorderIdsChange={setReorderIds} />}
+        {tab === "templates" && <TemplatesView templates={availableTemplates} user={user} reload={reload} />}
         {tab === "backup" && <BackupView records={records} user={user} reload={reload} />}
       </div>
       {menuOpen && <button className="nav-backdrop" onClick={() => setMenuOpen(false)} />}

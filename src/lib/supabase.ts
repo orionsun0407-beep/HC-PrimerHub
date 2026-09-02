@@ -97,7 +97,7 @@ export async function saveTemplate(
 ): Promise<OrderTemplate> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const storagePath = `${userId}/${id}/${file.name}`;
+  const storagePath = `${userId}/${id}/template.xlsx`;
   if (!supabase) {
     const saved: OrderTemplate = { ...template, id, user_id: userId, storage_path: storagePath, created_at: now, updated_at: now };
     const templates = await loadTemplates(userId);
@@ -107,7 +107,10 @@ export async function saveTemplate(
     return saved;
   }
 
-  const { error: uploadError } = await supabase.storage.from("order-templates").upload(storagePath, file, { upsert: false });
+  const { error: uploadError } = await supabase.storage.from("order-templates").upload(storagePath, file, {
+    upsert: false,
+    contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
   if (uploadError) throw uploadError;
   const { data, error } = await supabase
     .from("order_templates")
@@ -122,6 +125,11 @@ export async function saveTemplate(
 }
 
 export async function downloadTemplateFile(template: OrderTemplate): Promise<ArrayBuffer> {
+  if (template.storage_path.startsWith("builtin:")) {
+    const response = await fetch(template.storage_path.slice("builtin:".length));
+    if (!response.ok) throw new Error("系统默认模板下载失败，请刷新页面后重试。 ");
+    return response.arrayBuffer();
+  }
   if (!supabase) {
     const encoded = localStorage.getItem(`primerhub:template-file:${template.id}`);
     if (!encoded) throw new Error("本地演示模板文件不存在。 ");
@@ -133,6 +141,7 @@ export async function downloadTemplateFile(template: OrderTemplate): Promise<Arr
 }
 
 export async function removeTemplate(userId: string, template: OrderTemplate): Promise<void> {
+  if (template.system || template.storage_path.startsWith("builtin:")) return;
   if (!supabase) {
     writeDemo("templates", (await loadTemplates(userId)).filter((item) => item.id !== template.id));
     localStorage.removeItem(`primerhub:template-file:${template.id}`);

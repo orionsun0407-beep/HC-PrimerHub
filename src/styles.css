@@ -201,8 +201,9 @@ aside nav button.active svg { color: var(--mint); }
 .mapping-grid b { color: var(--red); margin-left: 2px; }
 .template-list { margin-top: 30px; }
 .template-list > article { display: grid; grid-template-columns: 44px minmax(0,1fr) 38px; gap: 13px; align-items: center; padding: 14px 16px; margin-bottom: 9px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.template-list > article.system-template { grid-template-columns: 44px minmax(0,1fr); border-color: #a9cfc1; background: #f8fcfa; }
 .file-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--mint-light); color: var(--green-700); }
-.template-list h3 { margin: 0 0 4px; font-size: 14px; }
+.template-list h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin: 0 0 4px; font-size: 14px; }
 .template-list p { margin: 0; color: var(--muted); font-size: 10px; }
 .icon-button { display: grid; place-items: center; background: transparent; padding: 8px; }
 

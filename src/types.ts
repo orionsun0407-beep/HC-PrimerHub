@@ -90,4 +90,5 @@ export type OrderTemplate = {
   defaults: OrderDefaults;
   created_at: string;
   updated_at: string;
+  system?: boolean;
 };
