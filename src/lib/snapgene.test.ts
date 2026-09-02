@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseSnapGeneBuffer } from "./snapgene";
 
 const encoder = new TextEncoder();
+const now = new Date("2026-01-10T12:00:00Z");
 
 function packet(type: number, data: Uint8Array): Uint8Array {
   const output = new Uint8Array(data.length + 5);
@@ -18,25 +19,71 @@ function join(...parts: Uint8Array[]): ArrayBuffer {
   return output.buffer;
 }
 
-describe("SnapGene parser", () => {
-  it("ignores simplified display bindings and rejects genuine multiple sites", () => {
-    const template = "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCCGGGG";
-    const sequencePacket = packet(0, new Uint8Array([0, ...encoder.encode(template)]));
-    const xml = `<?xml version="1.0"?><Primers><Primer name="Valid Fw" sequence="CCCCGG">
-      <BindingSite location="21-26" boundStrand="0" annealedBases="CCCCGG" meltingTemperature="60" />
-      <BindingSite simplified="1" location="23-26" boundStrand="0" annealedBases="CCGG" meltingTemperature="60" />
-      </Primer><Primer name="Bad multi" sequence="AAAACC">
-      <BindingSite location="1-6" boundStrand="0" annealedBases="AAAACC" />
-      <BindingSite location="17-22" boundStrand="0" annealedBases="AAAACC" />
-      <BindingSite simplified="1" location="1-6" boundStrand="0" annealedBases="AAAACC" />
-      </Primer></Primers>`;
-    const parsed = parseSnapGeneBuffer(join(sequencePacket, packet(5, encoder.encode(xml))), "template.dna");
+function dna(template: string, xml: string, circular = false): ArrayBuffer {
+  const sequencePacket = packet(0, new Uint8Array([circular ? 1 : 0, ...encoder.encode(template)]));
+  return join(sequencePacket, packet(5, encoder.encode(xml)));
+}
 
-    expect(parsed).toHaveLength(2);
-    expect(parsed[0].quality).toBe("valid");
-    expect(parsed[0].bindingContext).toMatchObject({ templateName: "template", start: 21, end: 26, strand: "+", upstream: "AAAACCCCGGGGTTTTAAAA", bindingSequence: "CCCCGG" });
-    expect(parsed[0].bindingContext?.downstream).toBe("GGTTTTAAAACCCCGGGGTT");
-    expect(parsed[1].quality).toBe("invalid");
-    expect(parsed[1].qualityReason).toContain("2 个");
+describe("SnapGene parser", () => {
+  it("uses zero-based SnapGene locations correctly and ignores low-Tm weak matches", () => {
+    const template = "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTT";
+    const xml = `<?xml version="1.0"?><Primers>
+      <HybridizationParams minMeltingTemperature="40" />
+      <Primer name="Valid Fw" sequence="CCCCGG" dateAdded="2026-01-08T10:00:00Z">
+        <BindingSite location="4-9" boundStrand="0" annealedBases="CCCCGG" meltingTemperature="31" />
+        <BindingSite location="20-25" boundStrand="0" annealedBases="CCCCGG" meltingTemperature="60" />
+        <BindingSite simplified="1" location="20-25" boundStrand="0" annealedBases="CCCCGG" meltingTemperature="60" />
+      </Primer>
+    </Primers>`;
+    const [primer] = parseSnapGeneBuffer(dna(template, xml), "template.dna", { now });
+
+    expect(primer.quality).toBe("valid");
+    expect(primer.qualityReason).toContain("已忽略 1 个低于 40°C");
+    expect(primer.bindingContext).toMatchObject({
+      templateName: "template",
+      start: 21,
+      end: 26,
+      strand: "+",
+      upstream: "AAAACCCCGGGGTTTTAAAA",
+      bindingSequence: "CCCCGG",
+      downstream: "GGTTTT",
+    });
+  });
+
+  it("still rejects multiple strong binding sites", () => {
+    const template = "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTT";
+    const xml = `<?xml version="1.0"?><Primers><Primer name="Bad multi" sequence="AAAACC" dateAdded="2026-01-08T10:00:00Z">
+      <BindingSite location="0-5" boundStrand="0" annealedBases="AAAACC" meltingTemperature="55" />
+      <BindingSite location="16-21" boundStrand="0" annealedBases="AAAACC" meltingTemperature="55" />
+    </Primer></Primers>`;
+    const [primer] = parseSnapGeneBuffer(dna(template, xml), "template.dna", { now });
+
+    expect(primer.quality).toBe("invalid");
+    expect(primer.qualityReason).toContain("2 个有效模板结合位点");
+  });
+
+  it("keeps only recent user-created primers and ignores undated bundled primers", () => {
+    const template = "AAAACCCCGGGGTTTT";
+    const binding = '<BindingSite location="0-5" boundStrand="0" annealedBases="AAAACC" meltingTemperature="55" />';
+    const xml = `<?xml version="1.0"?><Primers>
+      <Primer name="Recent" sequence="AAAACC" dateAdded="2026-01-08T10:00:00Z">${binding}</Primer>
+      <Primer name="Old" sequence="AAAACC" dateAdded="2025-12-20T10:00:00Z">${binding}</Primer>
+      <Primer name="Built in" sequence="AAAACC">${binding}</Primer>
+    </Primers>`;
+
+    expect(parseSnapGeneBuffer(dna(template, xml), "template.dna", { now }).map((item) => item.name)).toEqual(["Recent"]);
+    expect(parseSnapGeneBuffer(dna(template, xml), "template.dna", { now, onlyRecent: false }).map((item) => item.name)).toEqual(["Recent", "Old"]);
+  });
+
+  it("extracts a circular binding site that crosses the origin", () => {
+    const template = "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTT";
+    const xml = `<?xml version="1.0"?><Primers><Primer name="Origin Fw" sequence="TTTTAAAA" dateAdded="2026-01-08T10:00:00Z">
+      <BindingSite location="28-3" boundStrand="0" annealedBases="TTTTAAAA" meltingTemperature="50" />
+    </Primer></Primers>`;
+    const [primer] = parseSnapGeneBuffer(dna(template, xml, true), "circle.dna", { now });
+
+    expect(primer.bindingContext).toMatchObject({ start: 29, end: 4, bindingSequence: "TTTTAAAA", topology: "circular" });
+    expect(primer.bindingContext?.upstream).toHaveLength(20);
+    expect(primer.bindingContext?.downstream).toHaveLength(20);
   });
 });

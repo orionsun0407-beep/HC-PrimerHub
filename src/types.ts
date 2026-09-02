@@ -44,6 +44,7 @@ export type ImportedPrimer = {
   bindingContext: BindingContext | null;
   sourceType: PrimerRecord["source_type"];
   sourceFile: string;
+  dateAdded?: string;
   quality: "valid" | "invalid";
   qualityReason: string;
   duplicateNames: string[];

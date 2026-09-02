@@ -10,6 +10,12 @@ type RawBinding = {
   meltingTemperature?: number;
 };
 
+export type SnapGeneParseOptions = {
+  onlyRecent?: boolean;
+  recentDays?: number;
+  now?: Date;
+};
+
 function wrapSlice(sequence: string, startZero: number, length: number, circular: boolean): string {
   if (!circular) {
     const start = Math.max(0, startZero);
@@ -47,18 +53,23 @@ function buildContext(
     templateName,
     templateLength: sequence.length,
     topology: circular ? "circular" : "linear",
-    start: binding.start,
-    end: binding.end,
+    // SnapGene stores zero-based inclusive coordinates; the UI displays one-based values.
+    start: binding.start + 1,
+    end: binding.end + 1,
     strand: binding.strand,
-    upstream: wrapSlice(sequence, binding.start - 21, 20, circular),
-    bindingSequence: wrapSlice(sequence, binding.start - 1, bindingLength, circular),
-    downstream: wrapSlice(sequence, binding.end, 20, circular),
+    upstream: wrapSlice(sequence, binding.start - 20, 20, circular),
+    bindingSequence: wrapSlice(sequence, binding.start, bindingLength, circular),
+    downstream: wrapSlice(sequence, binding.end + 1, 20, circular),
     primerSequence,
     meltingTemperature: binding.meltingTemperature,
   };
 }
 
-export function parseSnapGeneBuffer(buffer: ArrayBuffer, fileName: string): ImportedPrimer[] {
+export function parseSnapGeneBuffer(
+  buffer: ArrayBuffer,
+  fileName: string,
+  options: SnapGeneParseOptions = {},
+): ImportedPrimer[] {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
   const decoder = new TextDecoder("utf-8");
@@ -88,20 +99,35 @@ export function parseSnapGeneBuffer(buffer: ArrayBuffer, fileName: string): Impo
   if (!primersXml) return [];
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_" });
   const parsed = parser.parse(primersXml) as {
-    Primers?: { Primer?: Record<string, unknown> | Array<Record<string, unknown>> };
+    Primers?: {
+      HybridizationParams?: Record<string, unknown>;
+      Primer?: Record<string, unknown> | Array<Record<string, unknown>>;
+    };
   };
   const rawPrimerNodes = parsed.Primers?.Primer;
   const primerNodes = rawPrimerNodes ? (Array.isArray(rawPrimerNodes) ? rawPrimerNodes : [rawPrimerNodes]) : [];
   const templateName = fileName.replace(/\.dna$/i, "");
+  const onlyRecent = options.onlyRecent ?? true;
+  const recentDays = options.recentDays ?? 7;
+  const now = options.now ?? new Date();
+  const cutoff = now.getTime() - recentDays * 24 * 60 * 60 * 1000;
+  const minimumTemperatureRaw = Number(parsed.Primers?.HybridizationParams?.["@_minMeltingTemperature"]);
+  const minimumTemperature = Number.isFinite(minimumTemperatureRaw) ? minimumTemperatureRaw : 40;
+  const eligibleNodes = primerNodes.filter((node) => {
+    const timestamp = Date.parse(String(node["@_dateAdded"] ?? ""));
+    if (!Number.isFinite(timestamp)) return false;
+    return !onlyRecent || timestamp >= cutoff;
+  });
 
-  return primerNodes.map((node) => {
+  return eligibleNodes.map((node) => {
     const name = String(node["@_name"] ?? "").trim() || "未命名 Primer";
     const sequence = normalizeSequence(String(node["@_sequence"] ?? ""));
+    const dateAdded = String(node["@_dateAdded"] ?? "");
     const rawBindings = node.BindingSite
       ? (Array.isArray(node.BindingSite) ? node.BindingSite : [node.BindingSite]) as Array<Record<string, unknown>>
       : [];
     const trueBindings = rawBindings.filter((binding) => String(binding["@_simplified"] ?? "") !== "1");
-    const bindings: RawBinding[] = trueBindings.flatMap((binding) => {
+    const allBindings: RawBinding[] = trueBindings.flatMap((binding) => {
       const range = parseLocation(String(binding["@_location"] ?? ""));
       if (!range) return [];
       const temperature = Number(binding["@_meltingTemperature"]);
@@ -112,15 +138,22 @@ export function parseSnapGeneBuffer(buffer: ArrayBuffer, fileName: string): Impo
         meltingTemperature: Number.isFinite(temperature) ? temperature : undefined,
       }];
     });
+    const bindings = allBindings.filter((binding) =>
+      binding.meltingTemperature === undefined || binding.meltingTemperature >= minimumTemperature,
+    );
+    const ignoredWeakBindings = allBindings.length - bindings.length;
 
     const isValid = bindings.length === 1 && sequence.length > 0;
+    const weakMatchNote = ignoredWeakBindings
+      ? `；已忽略 ${ignoredWeakBindings} 个低于 ${minimumTemperature}°C 的弱匹配`
+      : "";
     const reason = !sequence
       ? "Primer 序列为空"
       : bindings.length === 0
-        ? "没有有效模板结合位点"
+        ? `没有达到 ${minimumTemperature}°C 的有效模板结合位点${weakMatchNote}`
         : bindings.length > 1
-          ? `检测到 ${bindings.length} 个模板结合位点`
-          : "恰好一个有效模板结合位点";
+          ? `检测到 ${bindings.length} 个有效模板结合位点${weakMatchNote}`
+          : `恰好一个有效模板结合位点${weakMatchNote}`;
 
     return {
       localId: crypto.randomUUID(),
@@ -133,6 +166,7 @@ export function parseSnapGeneBuffer(buffer: ArrayBuffer, fileName: string): Impo
         : null,
       sourceType: "snapgene-dna" as const,
       sourceFile: fileName,
+      dateAdded,
       quality: isValid ? "valid" as const : "invalid" as const,
       qualityReason: reason,
       duplicateNames: [],

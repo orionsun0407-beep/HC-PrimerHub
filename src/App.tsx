@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Archive, ChevronDown, ChevronRight, CircleAlert, Cloud, Dna, Download,
   FileSpreadsheet, FlaskConical, Library, LoaderCircle, LogOut, Menu, Plus,
-  Save, Search, Settings2, ShieldCheck, Trash2, Upload, X,
+  RotateCcw, Save, Search, Settings2, ShieldCheck, Trash2, Upload, X,
 } from "lucide-react";
 import type { Session, User } from "@supabase/supabase-js";
 import type { BindingContext, ImportedPrimer, OrderDefaults, OrderTemplate, PrimerRecord, TemplateField, TemplateMapping } from "./types";
@@ -52,6 +52,28 @@ function enrichImported(imported: ImportedPrimer[], libraryRecords: PrimerRecord
     const duplicateNames = [...new Set(bySequence.get(primer.normalizedSequence) ?? [])];
     return { ...primer, duplicateNames, selected: primer.quality === "valid" && duplicateNames.length === 0 };
   });
+}
+
+function recordToImported(record: PrimerRecord): ImportedPrimer {
+  return {
+    localId: `library:${record.id}`,
+    name: record.name,
+    sequence: record.sequence,
+    normalizedSequence: record.normalized_sequence,
+    enzymeSites: record.enzyme_sites,
+    bindingContext: record.binding_context,
+    sourceType: record.source_type,
+    sourceFile: "Primer 库",
+    quality: "valid",
+    qualityReason: "再次合成已有 Primer",
+    duplicateNames: [],
+    selected: true,
+  };
+}
+
+function reorderNote(record: PrimerRecord, orderedAt: string): string {
+  const entry = `再次合成于 ${orderedAt}（此前订购时间 ${record.ordered_at}）`;
+  return record.notes ? `${record.notes}；${entry}` : entry;
 }
 
 function AuthScreen({ onDemo }: { onDemo: () => void }) {
@@ -170,7 +192,7 @@ function BindingDiagram({ context }: { context: BindingContext }) {
   );
 }
 
-function PrimerDetail({ record, onEdit, onDelete }: { record: PrimerRecord; onEdit: () => void; onDelete: () => void }) {
+function PrimerDetail({ record, onEdit, onDelete, onReorder }: { record: PrimerRecord; onEdit: () => void; onDelete: () => void; onReorder: () => void }) {
   return (
     <div className="primer-detail">
       <div className="detail-grid">
@@ -186,7 +208,7 @@ function PrimerDetail({ record, onEdit, onDelete }: { record: PrimerRecord; onEd
         )) : <span className="muted-text">未检测到</span>}
       </div>
       {record.binding_context && <BindingDiagram context={record.binding_context} />}
-      <div className="detail-actions"><button onClick={onEdit}><Settings2 />编辑</button><button className="danger" onClick={onDelete}><Trash2 />删除</button></div>
+      <div className="detail-actions"><button className="reorder-action" onClick={onReorder}><RotateCcw />再次合成</button><button onClick={onEdit}><Settings2 />编辑</button><button className="danger" onClick={onDelete}><Trash2 />删除</button></div>
     </div>
   );
 }
@@ -227,7 +249,7 @@ function ManualPrimerDialog({ initial, libraryRecords, onClose, onSave }: {
   );
 }
 
-function LibraryView({ records, user, reload }: { records: PrimerRecord[]; user: AppUser; reload: () => Promise<void> }) {
+function LibraryView({ records, user, reload, onReorder }: { records: PrimerRecord[]; user: AppUser; reload: () => Promise<void>; onReorder: (record: PrimerRecord) => void }) {
   const [query, setQuery] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -278,7 +300,7 @@ function LibraryView({ records, user, reload }: { records: PrimerRecord[]; user:
               <span className="mini-chips">{record.enzyme_sites.slice(0, 3).map((site) => <i key={`${site.enzyme}${site.start}`}>{site.enzyme}</i>)}{record.enzyme_sites.length > 3 && <i>+{record.enzyme_sites.length - 3}</i>}</span>
               <span>{expanded === record.id ? <ChevronDown /> : <ChevronRight />}</span>
             </button>
-            {expanded === record.id && <PrimerDetail record={record} onEdit={() => setDialog(record)} onDelete={() => remove(record)} />}
+            {expanded === record.id && <PrimerDetail record={record} onEdit={() => setDialog(record)} onDelete={() => remove(record)} onReorder={() => onReorder(record)} />}
           </div>
         ))}
         {!filtered.length && <div className="empty-state"><Search /><h3>没有匹配的 Primer</h3><p>尝试缩短序列片段或清除日期、酶切酶筛选。</p></div>}
@@ -292,7 +314,7 @@ function ImportedPrimerCard({ primer, onToggle }: { primer: ImportedPrimer; onTo
   return (
     <article className={`import-card ${primer.quality === "invalid" ? "invalid" : ""} ${primer.selected ? "selected" : ""}`}>
       <label className="import-select"><input type="checkbox" checked={primer.selected} disabled={primer.quality === "invalid"} onChange={onToggle} /><span /></label>
-      <div className="import-main"><div className="import-title"><h3>{primer.name}</h3>{primer.duplicateNames.length ? <span className="tag amber">已有序列</span> : <span className="tag green">新 Primer</span>}{primer.quality === "invalid" && <span className="tag red">不合格</span>}</div>
+      <div className="import-main"><div className="import-title"><h3>{primer.name}</h3>{primer.dateAdded && <span className="tag">添加于 {primer.dateAdded.slice(0, 10)}</span>}{primer.duplicateNames.length ? <span className="tag amber">已有序列</span> : <span className="tag green">新 Primer</span>}{primer.quality === "invalid" && <span className="tag red">不合格</span>}</div>
         <code>{primer.sequence}</code><p>{primer.qualityReason}{primer.duplicateNames.length ? `；与 ${primer.duplicateNames.join("、")} 相同` : ""}</p>
         <div className="mini-chips">{primer.enzymeSites.map((site) => <i key={`${site.enzyme}-${site.start}`}>{site.enzyme} {site.start}–{site.end}</i>)}</div>
         {primer.bindingContext && <BindingDiagram context={primer.bindingContext} />}
@@ -301,12 +323,21 @@ function ImportedPrimerCard({ primer, onToggle }: { primer: ImportedPrimer; onTo
   );
 }
 
-function OrderView({ records, templates, user, reload }: { records: PrimerRecord[]; templates: OrderTemplate[]; user: AppUser; reload: () => Promise<void> }) {
+function OrderView({ records, templates, user, reload, reorderIds, onReorderIdsChange }: {
+  records: PrimerRecord[];
+  templates: OrderTemplate[];
+  user: AppUser;
+  reload: () => Promise<void>;
+  reorderIds: string[];
+  onReorderIdsChange: (ids: string[]) => void;
+}) {
   const [imported, setImported] = useState<ImportedPrimer[]>([]);
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [defaults, setDefaults] = useState<OrderDefaults>(templates[0]?.defaults ?? DEFAULT_ORDER);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [onlyRecent, setOnlyRecent] = useState(true);
+  const [reorderQuery, setReorderQuery] = useState("");
   useEffect(() => { if (!templateId && templates[0]) setTemplateId(templates[0].id); }, [templates, templateId]);
   useEffect(() => { const selected = templates.find((template) => template.id === templateId); if (selected) setDefaults(selected.defaults); }, [templateId, templates]);
 
@@ -317,33 +348,51 @@ function OrderView({ records, templates, user, reload }: { records: PrimerRecord
       const parsed: ImportedPrimer[] = [];
       for (const file of [...files]) {
         const buffer = await file.arrayBuffer();
-        if (/\.dna$/i.test(file.name)) parsed.push(...parseSnapGeneBuffer(buffer, file.name));
+        if (/\.dna$/i.test(file.name)) parsed.push(...parseSnapGeneBuffer(buffer, file.name, { onlyRecent }));
         else parsed.push(...parsePrimerText(decodePrimerBuffer(buffer), file.name));
       }
       setImported(enrichImported(parsed, records));
-      setMessage(`已读取 ${parsed.length} 条 Primer，其中 ${parsed.filter((item) => item.quality === "invalid").length} 条未通过结合位点质量检查。`);
+      setMessage(parsed.length
+        ? `已读取 ${parsed.length} 条自建 Primer，其中 ${parsed.filter((item) => item.quality === "invalid").length} 条未通过结合位点质量检查；SnapGene 内置 Primer 已自动忽略。`
+        : `没有找到${onlyRecent ? "最近 7 天内" : "带添加时间的"}自建 Primer；SnapGene 内置 Primer 已自动忽略。`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "文件解析失败"); }
     finally { setBusy(false); }
   }
 
   const selected = imported.filter((primer) => primer.selected && primer.quality === "valid");
+  const reorderRecords = records.filter((record) => reorderIds.includes(record.id));
+  const reorderPrimers = reorderRecords.map(recordToImported);
+  const orderItems = [...reorderPrimers, ...selected];
+  const reorderCandidates = records.filter((record) => {
+    const needle = reorderQuery.trim().toLowerCase();
+    return !needle || record.name.toLowerCase().includes(needle) || record.normalized_sequence.toLowerCase().includes(needle);
+  }).slice(0, 10);
+  function toggleReorder(recordId: string) {
+    onReorderIdsChange(reorderIds.includes(recordId) ? reorderIds.filter((id) => id !== recordId) : [...reorderIds, recordId]);
+  }
   async function generateOrder() {
     const template = templates.find((item) => item.id === templateId);
-    if (!template || !selected.length) return;
+    if (!template || !orderItems.length) return;
     setBusy(true); setMessage("");
     try {
       const templateBuffer = await downloadTemplateFile(template);
-      const output = await fillOrderTemplate(templateBuffer, template.mapping, selected, defaults);
+      const output = await fillOrderTemplate(templateBuffer, template.mapping, orderItems, defaults);
       downloadBuffer(output, datedFileName(template.file_name));
       const orderedAt = shanghaiToday();
-      await insertPrimers(user.id, selected.map((primer) => ({
-        name: primer.name, sequence: primer.sequence, normalized_sequence: primer.normalizedSequence,
-        ordered_at: orderedAt, enzyme_sites: primer.enzymeSites,
-        notes: duplicateNote(primer.duplicateNames), binding_context: primer.bindingContext,
-        source_type: primer.sourceType,
+      if (selected.length) {
+        await insertPrimers(user.id, selected.map((primer) => ({
+          name: primer.name, sequence: primer.sequence, normalized_sequence: primer.normalizedSequence,
+          ordered_at: orderedAt, enzyme_sites: primer.enzymeSites,
+          notes: duplicateNote(primer.duplicateNames), binding_context: primer.bindingContext,
+          source_type: primer.sourceType,
+        })));
+      }
+      await Promise.all(reorderRecords.map((record) => updatePrimer(user.id, record.id, {
+        ordered_at: orderedAt,
+        notes: reorderNote(record, orderedAt),
       })));
-      setMessage(`订单已下载，${selected.length} 条 Primer 已写入库。`);
-      setImported([]); await reload();
+      setMessage(`订单已下载：${selected.length} 条新 Primer，${reorderRecords.length} 条再次合成；库中最近订购时间已更新。`);
+      setImported([]); onReorderIdsChange([]); await reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "订单生成失败"); }
     finally { setBusy(false); }
   }
@@ -351,17 +400,26 @@ function OrderView({ records, templates, user, reload }: { records: PrimerRecord
   return (
     <section className="page-section">
       <div className="page-heading"><div><p className="eyebrow">IMPORT & ORDER</p><h1>读取、比对并生成订单</h1><p>`.dna` 文件在浏览器本地解析；新 Primer 默认选中，已有序列默认不选，不合格 Primer 禁止下单。</p></div></div>
+      <div className="reorder-selector">
+        <div className="reorder-heading"><div><p className="eyebrow">RE-SYNTHESIS</p><h2>再次合成已有 Primer</h2><p>搜索并选择多条库内记录，和新 Primer 合并到同一份订单。</p></div>{reorderRecords.length > 0 && <strong>{reorderRecords.length} 条已选</strong>}</div>
+        <label className="search-field"><Search /><input placeholder="搜索已有 Primer 名称或序列…" value={reorderQuery} onChange={(event) => setReorderQuery(event.target.value)} /></label>
+        <div className="reorder-candidates">{reorderCandidates.map((record) => {
+          const active = reorderIds.includes(record.id);
+          return <button className={active ? "active" : ""} onClick={() => toggleReorder(record.id)} key={record.id}><span>{record.name}</span><small>{record.normalized_sequence.length} nt · 上次 {record.ordered_at}</small>{active ? <X /> : <Plus />}</button>;
+        })}</div>
+      </div>
+      <label className="import-option"><input type="checkbox" checked={onlyRecent} onChange={(event) => setOnlyRecent(event.target.checked)} /><span>只读取最近 7 天新增的 Primer（推荐）</span></label>
       <label className="drop-zone"><input type="file" multiple accept=".dna,.txt,.tsv,.csv,text/plain" onChange={(event) => readFiles(event.target.files)} /><Upload /><strong>{busy ? "正在解析…" : "拖入或选择 SnapGene 文件"}</strong><span>支持 `.dna`、TXT、TSV、CSV；可一次选择多个文件</span></label>
       {message && <div className="status-banner"><Cloud />{message}</div>}
       {imported.length > 0 && <>
         <div className="section-toolbar"><div><h2>筛选确认</h2><p>{selected.length} 条已选 / {imported.length} 条读取</p></div><div><button onClick={() => setImported(imported.map((item) => ({ ...item, selected: item.quality === "valid" })))}>选择全部合格</button><button onClick={() => setImported(imported.map((item) => ({ ...item, selected: false })))}>清空</button></div></div>
         <div className="import-list">{imported.map((primer) => <ImportedPrimerCard key={primer.localId} primer={primer} onToggle={() => setImported(imported.map((item) => item.localId === primer.localId ? { ...item, selected: !item.selected } : item))} />)}</div>
-        <div className="order-panel"><div><p className="eyebrow">ORDER OUTPUT</p><h2>订单设置</h2></div>
+      </>}
+      {orderItems.length > 0 && <div className="order-panel"><div><p className="eyebrow">ORDER OUTPUT</p><h2>订单设置</h2><p>{selected.length} 条新 Primer · {reorderRecords.length} 条再次合成</p></div>
           {templates.length ? <div className="order-form"><label>订单模板<select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option value={template.id} key={template.id}>{template.name}</option>)}</select></label>
             <label>合成规格<input value={defaults.spec} onChange={(event) => setDefaults({ ...defaults, spec: event.target.value })} /></label><label>分装管数<input value={defaults.tubes} onChange={(event) => setDefaults({ ...defaults, tubes: event.target.value })} /></label><label>纯化方式<input value={defaults.purification} onChange={(event) => setDefaults({ ...defaults, purification: event.target.value })} /></label><label>修饰<input value={defaults.modification} onChange={(event) => setDefaults({ ...defaults, modification: event.target.value })} /></label><label>交付形式<input value={defaults.delivery} onChange={(event) => setDefaults({ ...defaults, delivery: event.target.value })} /></label><label className="wide-field">统一备注<input value={defaults.notes} onChange={(event) => setDefaults({ ...defaults, notes: event.target.value })} /></label>
-            <button className="primary wide-field" disabled={busy || !selected.length} onClick={generateOrder}><Download />生成并下载订单 · {selected.length} 条</button></div> : <div className="empty-inline"><FileSpreadsheet />请先到“订单模板”上传并保存一个模板。</div>}
-        </div>
-      </>}
+            <button className="primary wide-field" disabled={busy || !orderItems.length} onClick={generateOrder}><Download />生成并下载订单 · {orderItems.length} 条</button></div> : <div className="empty-inline"><FileSpreadsheet />请先到“订单模板”上传并保存一个模板。</div>}
+      </div>}
     </section>
   );
 }
@@ -457,6 +515,7 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [records, setRecords] = useState<PrimerRecord[]>([]);
   const [templates, setTemplates] = useState<OrderTemplate[]>([]);
+  const [reorderIds, setReorderIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const user: AppUser | null = demo ? DEMO_USER : session?.user ? { id: session.user.id, email: session.user.email } : null;
 
@@ -490,8 +549,8 @@ export default function App() {
         <div className="side-user"><div className="avatar">{user.email?.[0]?.toUpperCase()}</div><div><strong>{user.email}</strong><span>{isSupabaseConfigured ? "云端已同步" : "本地演示模式"}</span></div><button onClick={logout}><LogOut /></button></div>
       </aside>
       <div className="app-main"><header className="mobile-header"><button onClick={() => setMenuOpen(true)}><Menu /></button><strong>HC PrimerHub</strong>{loading ? <LoaderCircle className="spin" /> : <Cloud />}</header>
-        {tab === "library" && <LibraryView records={records} user={user} reload={reload} />}
-        {tab === "order" && <OrderView records={records} templates={templates} user={user} reload={reload} />}
+        {tab === "library" && <LibraryView records={records} user={user} reload={reload} onReorder={(record) => { setReorderIds((ids) => ids.includes(record.id) ? ids : [...ids, record.id]); setTab("order"); }} />}
+        {tab === "order" && <OrderView records={records} templates={templates} user={user} reload={reload} reorderIds={reorderIds} onReorderIdsChange={setReorderIds} />}
         {tab === "templates" && <TemplatesView templates={templates} user={user} reload={reload} />}
         {tab === "backup" && <BackupView records={records} user={user} reload={reload} />}
       </div>

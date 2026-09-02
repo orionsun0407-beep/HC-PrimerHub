@@ -5,7 +5,7 @@ const filePath = process.argv[2];
 if (!filePath) throw new Error("Usage: vite-node scripts/inspect-dna.ts <file.dna>");
 const bytes = await fs.readFile(filePath);
 const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-const primers = parseSnapGeneBuffer(buffer, filePath.split("/").pop() || "template.dna");
+const primers = parseSnapGeneBuffer(buffer, filePath.split("/").pop() || "template.dna", { onlyRecent: false });
 console.log(JSON.stringify({
   total: primers.length,
   valid: primers.filter((primer) => primer.quality === "valid").length,
