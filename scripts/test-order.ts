@@ -16,13 +16,27 @@ const primers: ImportedPrimer[] = Array.from({ length: 25 }, (_, index) => ({
 }));
 const output = await fillOrderTemplate(input, mapping, primers, { spec: "2", tubes: "1", purification: "RPC", modification: "", delivery: "液体", notes: "" });
 await fs.writeFile(outputPath, new Uint8Array(output));
+const source = new ExcelJS.Workbook();
+await source.xlsx.load(input as never);
 const check = new ExcelJS.Workbook();
 await check.xlsx.load(output as never);
 const sheet = check.getWorksheet(mapping.sheetName)!;
+const sourceSheet = source.getWorksheet(mapping.sheetName)!;
 const lastRow = mapping.firstDataRow + primers.length - 1;
+function cellText(value: ExcelJS.CellValue): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object" && "richText" in value) return value.richText.map((item) => item.text).join("");
+  if (typeof value === "object" && "text" in value) return String(value.text ?? "");
+  if (typeof value === "object" && "result" in value) return String(value.result ?? "");
+  return String(value);
+}
+const headerSnapshot = (worksheet: ExcelJS.Worksheet) => Array.from({ length: mapping.firstDataRow - 1 }, (_, rowIndex) =>
+  Array.from({ length: worksheet.columnCount }, (_, columnIndex) => cellText(worksheet.getRow(rowIndex + 1).getCell(columnIndex + 1).value)),
+);
 console.log(JSON.stringify({
   mapping,
   outputPath,
+  headerPreserved: JSON.stringify(headerSnapshot(sourceSheet)) === JSON.stringify(headerSnapshot(sheet)),
   firstPrimer: sheet.getRow(mapping.firstDataRow).getCell(mapping.columns.name!).value,
   lastPrimer: sheet.getRow(lastRow).getCell(mapping.columns.name!).value,
   lastFormula: sheet.getRow(lastRow).getCell(mapping.columns.length!).value,

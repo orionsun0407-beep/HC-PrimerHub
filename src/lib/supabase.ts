@@ -1,5 +1,5 @@
 import { createClient, type Session } from "@supabase/supabase-js";
-import type { OrderProfile, OrderTemplate, PrimerRecord } from "../types";
+import type { OrderTemplate, PrimerRecord } from "../types";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
@@ -16,49 +16,6 @@ export async function getSession(): Promise<Session | null> {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
   return data.session;
-}
-
-const PROFILE_FIELDS: Array<keyof OrderProfile> = [
-  "customerUnit", "customerName", "invoiceTitle", "principal",
-  "address", "settlement", "phone", "email",
-];
-
-export function emptyOrderProfile(accountEmail = ""): OrderProfile {
-  return {
-    customerUnit: "", customerName: "", invoiceTitle: "", principal: "",
-    address: "", settlement: "", phone: "", email: accountEmail,
-  };
-}
-
-function normalizeOrderProfile(value: unknown, accountEmail = ""): OrderProfile {
-  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const profile = emptyOrderProfile(accountEmail);
-  for (const field of PROFILE_FIELDS) {
-    const candidate = source[field];
-    if (typeof candidate === "string") profile[field] = candidate.trim().slice(0, 500);
-  }
-  if (!profile.email) profile.email = accountEmail;
-  return profile;
-}
-
-export async function loadOrderProfile(userId: string, accountEmail = ""): Promise<OrderProfile> {
-  if (!supabase) return normalizeOrderProfile(readDemo<unknown>("order-profile", null), accountEmail);
-  const { data, error } = await supabase.auth.getUser();
-  if (error) throw error;
-  if (!data.user || data.user.id !== userId) throw new Error("当前登录状态已失效，请重新登录。 ");
-  return normalizeOrderProfile(data.user.user_metadata?.order_profile, accountEmail);
-}
-
-export async function saveOrderProfile(userId: string, profile: OrderProfile): Promise<OrderProfile> {
-  const normalized = normalizeOrderProfile(profile);
-  if (!supabase) {
-    writeDemo("order-profile", normalized);
-    return normalized;
-  }
-  const { data, error } = await supabase.auth.updateUser({ data: { order_profile: normalized } });
-  if (error) throw error;
-  if (!data.user || data.user.id !== userId) throw new Error("订购资料未保存，请重新登录后再试。 ");
-  return normalizeOrderProfile(data.user.user_metadata?.order_profile);
 }
 
 export async function loadPrimers(userId: string): Promise<PrimerRecord[]> {
@@ -168,11 +125,6 @@ export async function saveTemplate(
 }
 
 export async function downloadTemplateFile(template: OrderTemplate): Promise<ArrayBuffer> {
-  if (template.storage_path.startsWith("builtin:")) {
-    const response = await fetch(template.storage_path.slice("builtin:".length));
-    if (!response.ok) throw new Error("系统默认模板下载失败，请刷新页面后重试。 ");
-    return response.arrayBuffer();
-  }
   if (!supabase) {
     const encoded = localStorage.getItem(`primerhub:template-file:${template.id}`);
     if (!encoded) throw new Error("本地演示模板文件不存在。 ");
@@ -184,7 +136,6 @@ export async function downloadTemplateFile(template: OrderTemplate): Promise<Arr
 }
 
 export async function removeTemplate(userId: string, template: OrderTemplate): Promise<void> {
-  if (template.system || template.storage_path.startsWith("builtin:")) return;
   if (!supabase) {
     writeDemo("templates", (await loadTemplates(userId)).filter((item) => item.id !== template.id));
     localStorage.removeItem(`primerhub:template-file:${template.id}`);

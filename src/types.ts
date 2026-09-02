@@ -80,22 +80,6 @@ export type OrderDefaults = {
   notes: string;
 };
 
-export type OrderProfile = {
-  customerUnit: string;
-  customerName: string;
-  invoiceTitle: string;
-  principal: string;
-  address: string;
-  settlement: string;
-  phone: string;
-  email: string;
-};
-
-export type OrderHeaderMapping = {
-  sheetName?: string;
-  cells: Partial<Record<keyof OrderProfile | "orderDate", string>>;
-};
-
 export type OrderTemplate = {
   id: string;
   user_id: string;
@@ -104,8 +88,6 @@ export type OrderTemplate = {
   storage_path: string;
   mapping: TemplateMapping;
   defaults: OrderDefaults;
-  headerMapping?: OrderHeaderMapping;
   created_at: string;
   updated_at: string;
-  system?: boolean;
 };
