@@ -5,18 +5,18 @@ import {
   RotateCcw, Save, Search, Settings2, ShieldCheck, Trash2, Upload, X,
 } from "lucide-react";
 import type { Session, User } from "@supabase/supabase-js";
-import type { BindingContext, ImportedPrimer, OrderDefaults, OrderTemplate, PrimerRecord, TemplateField, TemplateMapping } from "./types";
+import type { BindingContext, ImportedPrimer, OrderDefaults, OrderProfile, OrderTemplate, PrimerRecord, TemplateField, TemplateMapping } from "./types";
 import biosuneTemplateUrl from "../outputs/system-default-template/铂尚引物合成订购单.xlsx?url";
 import { decodePrimerBuffer, parsePrimerText } from "./lib/primerText";
 import { parseSnapGeneBuffer } from "./lib/snapgene";
 import { findSequenceMatches, gcPercent, normalizeSequence, reverseComplement, scanRestrictionSites } from "./lib/sequence";
 import {
   datedFileName, detectTemplateMapping, downloadBuffer, exportPrimerLibrary,
-  fillOrderTemplate, parseHistoricalOrders,
+  extractOrderProfile, fillOrderTemplate, parseHistoricalOrders,
 } from "./lib/excel";
 import {
-  deletePrimer, downloadTemplateFile, getSession, insertPrimers, isSupabaseConfigured,
-  loadPrimers, loadTemplates, removeTemplate, saveTemplate, supabase, updatePrimer,
+  deletePrimer, downloadTemplateFile, emptyOrderProfile, getSession, insertPrimers, isSupabaseConfigured,
+  loadOrderProfile, loadPrimers, loadTemplates, removeTemplate, saveOrderProfile, saveTemplate, supabase, updatePrimer,
 } from "./lib/supabase";
 
 type Tab = "library" | "order" | "templates" | "backup";
@@ -39,6 +39,20 @@ const DEFAULT_BIOSUNE_TEMPLATE: OrderTemplate = {
     columns: { id: 1, name: 2, sequence: 3, length: 4, spec: 5, tubes: 6, purification: 7, modification: 8, delivery: 9, notes: 10 },
   },
   defaults: DEFAULT_ORDER,
+  headerMapping: {
+    sheetName: "订单表",
+    cells: {
+      orderDate: "J2",
+      customerUnit: "B6",
+      customerName: "F6",
+      invoiceTitle: "B7",
+      principal: "F7",
+      address: "B8",
+      settlement: "F8",
+      phone: "B9",
+      email: "F9",
+    },
+  },
   created_at: "2026-09-02T00:00:00.000Z",
   updated_at: "2026-09-02T00:00:00.000Z",
   system: true,
@@ -342,9 +356,10 @@ function ImportedPrimerCard({ primer, onToggle }: { primer: ImportedPrimer; onTo
   );
 }
 
-function OrderView({ records, templates, user, reload, reorderIds, onReorderIdsChange }: {
+function OrderView({ records, templates, profile, user, reload, reorderIds, onReorderIdsChange }: {
   records: PrimerRecord[];
   templates: OrderTemplate[];
+  profile: OrderProfile;
   user: AppUser;
   reload: () => Promise<void>;
   reorderIds: string[];
@@ -395,7 +410,11 @@ function OrderView({ records, templates, user, reload, reorderIds, onReorderIdsC
     setBusy(true); setMessage("");
     try {
       const templateBuffer = await downloadTemplateFile(template);
-      const output = await fillOrderTemplate(templateBuffer, template.mapping, orderItems, defaults);
+      const output = await fillOrderTemplate(templateBuffer, template.mapping, orderItems, defaults, {
+        profile,
+        headerMapping: template.headerMapping,
+        orderDate: shanghaiToday(),
+      });
       downloadBuffer(output, datedFileName(template.file_name));
       const orderedAt = shanghaiToday();
       if (selected.length) {
@@ -468,7 +487,56 @@ function TemplateEditor({ file, initial, onCancel, onSaved, user }: { file: File
   );
 }
 
-function TemplatesView({ templates, user, reload }: { templates: OrderTemplate[]; user: AppUser; reload: () => Promise<void> }) {
+function OrderProfileEditor({ profile, user, onSaved }: { profile: OrderProfile; user: AppUser; onSaved: (profile: OrderProfile) => void }) {
+  const [draft, setDraft] = useState(profile);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const importInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { setDraft(profile); }, [profile]);
+  function update(field: keyof OrderProfile, value: string) { setDraft({ ...draft, [field]: value }); }
+  async function importExisting(file?: File) {
+    if (!file || !DEFAULT_BIOSUNE_TEMPLATE.headerMapping) return;
+    setBusy(true); setMessage("");
+    try {
+      const imported = await extractOrderProfile(await file.arrayBuffer(), DEFAULT_BIOSUNE_TEMPLATE.headerMapping, DEFAULT_BIOSUNE_TEMPLATE.mapping.sheetName);
+      setDraft({ ...imported, email: imported.email || draft.email || user.email || "" });
+      setMessage("已从已有铂尚订单读取订购资料，请检查后点击保存。原文件没有上传。 ");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "订购资料读取失败"); }
+    finally { setBusy(false); if (importInput.current) importInput.current.value = ""; }
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setMessage("");
+    try {
+      const saved = await saveOrderProfile(user.id, draft);
+      setDraft(saved); onSaved(saved);
+      setMessage("订购资料已私密保存，生成铂尚订单时会自动填写。 ");
+    } catch (error) { setMessage(error instanceof Error ? `保存失败：${error.message}` : "订购资料保存失败"); }
+    finally { setBusy(false); }
+  }
+  return (
+    <form className="customer-profile-panel" onSubmit={submit}>
+      <div className="profile-heading"><div><p className="eyebrow">PRIVATE ORDER PROFILE</p><h2>我的铂尚订购资料</h2><p>每个账号独立保存，仅在本账号生成订单时写入客户信息；公共模板不包含这些内容。</p></div><ShieldCheck /></div>
+      <div className="profile-grid">
+        <label>客户单位<input value={draft.customerUnit} onChange={(event) => update("customerUnit", event.target.value)} /></label>
+        <label>联系人<input value={draft.customerName} onChange={(event) => update("customerName", event.target.value)} /></label>
+        <label>联系电话<input type="text" inputMode="tel" autoComplete="tel" value={draft.phone} onChange={(event) => update("phone", event.target.value)} /></label>
+        <label>邮箱<input type="email" value={draft.email} onChange={(event) => update("email", event.target.value)} /></label>
+        <label>发票抬头<input value={draft.invoiceTitle} onChange={(event) => update("invoiceTitle", event.target.value)} /></label>
+        <label>课题组负责人<input value={draft.principal} onChange={(event) => update("principal", event.target.value)} /></label>
+        <label className="profile-wide">联系地址<input value={draft.address} onChange={(event) => update("address", event.target.value)} /></label>
+        <label>结算方式<input value={draft.settlement} onChange={(event) => update("settlement", event.target.value)} /></label>
+      </div>
+      <div className="profile-actions">
+        <input ref={importInput} type="file" accept=".xlsx" onChange={(event) => importExisting(event.target.files?.[0])} />
+        <button type="button" onClick={() => importInput.current?.click()} disabled={busy}><Upload />从已有铂尚订单读取</button>
+        <button className="primary" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : <Save />}{busy ? "正在处理…" : "保存我的订购资料"}</button>
+      </div>
+      {message && <div className="status-banner"><Cloud />{message}</div>}
+    </form>
+  );
+}
+
+function TemplatesView({ templates, profile, user, reload, onProfileSaved }: { templates: OrderTemplate[]; profile: OrderProfile; user: AppUser; reload: () => Promise<void>; onProfileSaved: (profile: OrderProfile) => void }) {
   const [draft, setDraft] = useState<{ file: File; mapping: TemplateMapping } | null>(null);
   const [message, setMessage] = useState("");
   async function selectFile(file?: File) {
@@ -483,6 +551,7 @@ function TemplatesView({ templates, user, reload }: { templates: OrderTemplate[]
   }
   return (
     <section className="page-section"><div className="page-heading"><div><p className="eyebrow">ORDER TEMPLATES</p><h1>订单模板</h1><p>上传任意供应商的 Excel 订单表，自动识别字段并保存映射；文件仅当前用户可访问。</p></div></div>
+      <OrderProfileEditor profile={profile} user={user} onSaved={onProfileSaved} />
       {!draft && <label className="drop-zone compact"><input type="file" accept=".xlsx" onChange={(event) => selectFile(event.target.files?.[0])} /><FileSpreadsheet /><strong>上传新的 Excel 订单模板</strong><span>系统会寻找名称、序列、长度、规格、纯化等列</span></label>}
       {message && <div className="status-banner error"><CircleAlert />{message}</div>}
       {draft && <TemplateEditor file={draft.file} initial={draft.mapping} user={user} onCancel={() => setDraft(null)} onSaved={async () => { setDraft(null); await reload(); }} />}
@@ -538,6 +607,9 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [records, setRecords] = useState<PrimerRecord[]>([]);
   const [templates, setTemplates] = useState<OrderTemplate[]>([]);
+  const [orderProfile, setOrderProfile] = useState<OrderProfile>(emptyOrderProfile());
+  const [loadedUserId, setLoadedUserId] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [reorderIds, setReorderIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const user: AppUser | null = demo ? DEMO_USER : session?.user ? { id: session.user.id, email: session.user.email } : null;
@@ -551,13 +623,27 @@ export default function App() {
 
   async function reload() {
     if (!user) return;
-    setLoading(true);
-    try { const [nextRecords, nextTemplates] = await Promise.all([loadPrimers(user.id), loadTemplates(user.id)]); setRecords(nextRecords); setTemplates(nextTemplates); }
+    setLoading(true); setLoadError("");
+    try {
+      const [nextRecords, nextTemplates, nextProfile] = await Promise.all([
+        loadPrimers(user.id), loadTemplates(user.id), loadOrderProfile(user.id, user.email ?? ""),
+      ]);
+      setRecords(nextRecords); setTemplates(nextTemplates); setOrderProfile(nextProfile);
+      setLoadedUserId(user.id);
+    }
+    catch (error) { setLoadError(error instanceof Error ? error.message : "私有数据读取失败"); throw error; }
     finally { setLoading(false); }
   }
-  useEffect(() => { if (user) void reload(); }, [user?.id]);
+  useEffect(() => {
+    if (!user) return;
+    setLoadedUserId(""); setRecords([]); setTemplates([]); setOrderProfile(emptyOrderProfile(user.email ?? ""));
+    void reload().catch(() => undefined);
+  }, [user?.id]);
 
-  async function logout() { if (supabase) await supabase.auth.signOut(); setDemo(false); setSession(null); }
+  async function logout() {
+    if (supabase) await supabase.auth.signOut();
+    setDemo(false); setSession(null); setLoadedUserId(""); setRecords([]); setTemplates([]); setOrderProfile(emptyOrderProfile());
+  }
   if (booting) return <div className="splash"><div className="brand-mark large"><Dna /></div><LoaderCircle className="spin" /></div>;
   if (!user) return <AuthScreen onDemo={() => setDemo(true)} />;
 
@@ -573,10 +659,12 @@ export default function App() {
         <div className="side-user"><div className="avatar">{user.email?.[0]?.toUpperCase()}</div><div><strong>{user.email}</strong><span>{isSupabaseConfigured ? "云端已同步" : "本地演示模式"}</span></div><button onClick={logout}><LogOut /></button></div>
       </aside>
       <div className="app-main"><header className="mobile-header"><button onClick={() => setMenuOpen(true)}><Menu /></button><strong>HC PrimerHub</strong>{loading ? <LoaderCircle className="spin" /> : <Cloud />}</header>
-        {tab === "library" && <LibraryView records={records} user={user} reload={reload} onReorder={(record) => { setReorderIds((ids) => ids.includes(record.id) ? ids : [...ids, record.id]); setTab("order"); }} />}
-        {tab === "order" && <OrderView records={records} templates={availableTemplates} user={user} reload={reload} reorderIds={reorderIds} onReorderIdsChange={setReorderIds} />}
-        {tab === "templates" && <TemplatesView templates={availableTemplates} user={user} reload={reload} />}
-        {tab === "backup" && <BackupView records={records} user={user} reload={reload} />}
+        {loadedUserId !== user.id ? <div className="page-loader">{loadError ? <><CircleAlert /><span>{loadError}</span><button className="primary" onClick={() => void reload().catch(() => undefined)}>重新读取</button></> : <><LoaderCircle className="spin" /><span>正在读取私有数据…</span></>}</div> : <>
+          {tab === "library" && <LibraryView records={records} user={user} reload={reload} onReorder={(record) => { setReorderIds((ids) => ids.includes(record.id) ? ids : [...ids, record.id]); setTab("order"); }} />}
+          {tab === "order" && <OrderView records={records} templates={availableTemplates} profile={orderProfile} user={user} reload={reload} reorderIds={reorderIds} onReorderIdsChange={setReorderIds} />}
+          {tab === "templates" && <TemplatesView templates={availableTemplates} profile={orderProfile} user={user} reload={reload} onProfileSaved={setOrderProfile} />}
+          {tab === "backup" && <BackupView records={records} user={user} reload={reload} />}
+        </>}
       </div>
       {menuOpen && <button className="nav-backdrop" onClick={() => setMenuOpen(false)} />}
     </div>

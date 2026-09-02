@@ -1,5 +1,5 @@
 import type ExcelJS from "exceljs";
-import type { ImportedPrimer, OrderDefaults, PrimerRecord, TemplateField, TemplateMapping } from "../types";
+import type { ImportedPrimer, OrderDefaults, OrderHeaderMapping, OrderProfile, PrimerRecord, TemplateField, TemplateMapping } from "../types";
 import { normalizeSequence, scanRestrictionSites } from "./sequence";
 
 const MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -124,11 +124,28 @@ export async function fillOrderTemplate(
   mapping: TemplateMapping,
   primers: ImportedPrimer[],
   defaults: OrderDefaults,
+  options: { profile?: OrderProfile; headerMapping?: OrderHeaderMapping; orderDate?: string } = {},
 ): Promise<ArrayBuffer> {
   const workbook = await createWorkbook();
   await workbook.xlsx.load(buffer as never);
   const sheet = workbook.getWorksheet(mapping.sheetName);
   if (!sheet) throw new Error(`模板中不存在工作表“${mapping.sheetName}”。`);
+
+  if (options.headerMapping) {
+    const headerSheetName = options.headerMapping.sheetName ?? mapping.sheetName;
+    const headerSheet = workbook.getWorksheet(headerSheetName);
+    if (!headerSheet) throw new Error(`模板中不存在订购资料工作表“${headerSheetName}”。`);
+    const values: Record<keyof OrderProfile | "orderDate", string> = {
+      ...(options.profile ?? {
+        customerUnit: "", customerName: "", invoiceTitle: "", principal: "",
+        address: "", settlement: "", phone: "", email: "",
+      }),
+      orderDate: options.orderDate ?? "",
+    };
+    for (const [field, address] of Object.entries(options.headerMapping.cells) as Array<[keyof typeof values, string]>) {
+      if (address) headerSheet.getCell(address).value = values[field] ?? "";
+    }
+  }
   const added = ensureCapacity(sheet, mapping, primers.length);
   const totalCapacity = mapping.capacity + added;
 
@@ -158,6 +175,27 @@ export async function fillOrderTemplate(
     set("notes", defaults.notes);
   }
   return (await workbook.xlsx.writeBuffer()) as ArrayBuffer;
+}
+
+export async function extractOrderProfile(
+  buffer: ArrayBuffer,
+  mapping: OrderHeaderMapping,
+  fallbackSheetName: string,
+): Promise<OrderProfile> {
+  const workbook = await createWorkbook();
+  await workbook.xlsx.load(buffer as never);
+  const sheetName = mapping.sheetName ?? fallbackSheetName;
+  const sheet = workbook.getWorksheet(sheetName);
+  if (!sheet) throw new Error(`订单中不存在工作表“${sheetName}”。`);
+  const profile: OrderProfile = {
+    customerUnit: "", customerName: "", invoiceTitle: "", principal: "",
+    address: "", settlement: "", phone: "", email: "",
+  };
+  for (const field of Object.keys(profile) as Array<keyof OrderProfile>) {
+    const address = mapping.cells[field];
+    if (address) profile[field] = text(sheet.getCell(address).value).trim();
+  }
+  return profile;
 }
 
 export function datedFileName(fileName: string, date = new Date()): string {

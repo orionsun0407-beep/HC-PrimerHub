@@ -1,5 +1,5 @@
 import { createClient, type Session } from "@supabase/supabase-js";
-import type { OrderTemplate, PrimerRecord } from "../types";
+import type { OrderProfile, OrderTemplate, PrimerRecord } from "../types";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
@@ -16,6 +16,49 @@ export async function getSession(): Promise<Session | null> {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
   return data.session;
+}
+
+const PROFILE_FIELDS: Array<keyof OrderProfile> = [
+  "customerUnit", "customerName", "invoiceTitle", "principal",
+  "address", "settlement", "phone", "email",
+];
+
+export function emptyOrderProfile(accountEmail = ""): OrderProfile {
+  return {
+    customerUnit: "", customerName: "", invoiceTitle: "", principal: "",
+    address: "", settlement: "", phone: "", email: accountEmail,
+  };
+}
+
+function normalizeOrderProfile(value: unknown, accountEmail = ""): OrderProfile {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const profile = emptyOrderProfile(accountEmail);
+  for (const field of PROFILE_FIELDS) {
+    const candidate = source[field];
+    if (typeof candidate === "string") profile[field] = candidate.trim().slice(0, 500);
+  }
+  if (!profile.email) profile.email = accountEmail;
+  return profile;
+}
+
+export async function loadOrderProfile(userId: string, accountEmail = ""): Promise<OrderProfile> {
+  if (!supabase) return normalizeOrderProfile(readDemo<unknown>("order-profile", null), accountEmail);
+  const { data, error } = await supabase.auth.getUser();
+  if (error) throw error;
+  if (!data.user || data.user.id !== userId) throw new Error("当前登录状态已失效，请重新登录。 ");
+  return normalizeOrderProfile(data.user.user_metadata?.order_profile, accountEmail);
+}
+
+export async function saveOrderProfile(userId: string, profile: OrderProfile): Promise<OrderProfile> {
+  const normalized = normalizeOrderProfile(profile);
+  if (!supabase) {
+    writeDemo("order-profile", normalized);
+    return normalized;
+  }
+  const { data, error } = await supabase.auth.updateUser({ data: { order_profile: normalized } });
+  if (error) throw error;
+  if (!data.user || data.user.id !== userId) throw new Error("订购资料未保存，请重新登录后再试。 ");
+  return normalizeOrderProfile(data.user.user_metadata?.order_profile);
 }
 
 export async function loadPrimers(userId: string): Promise<PrimerRecord[]> {
