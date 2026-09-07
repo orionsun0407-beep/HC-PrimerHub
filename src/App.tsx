@@ -21,7 +21,6 @@ import {
 type Tab = "library" | "order" | "templates" | "backup";
 type AppUser = Pick<User, "id" | "email">;
 
-const OWNER_EMAIL = import.meta.env.VITE_OWNER_EMAIL?.trim().toLowerCase() || "";
 const DEMO_USER: AppUser = { id: "00000000-0000-4000-8000-000000000001", email: "demo@primerhub.local" };
 const DEFAULT_ORDER: OrderDefaults = { spec: "2", tubes: "1", purification: "RPC", modification: "", delivery: "液体", notes: "" };
 function authRedirectUrl(): string {
@@ -77,7 +76,7 @@ function reorderNote(record: PrimerRecord, orderedAt: string): string {
 
 function AuthScreen({ onDemo }: { onDemo: () => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
-  const [email, setEmail] = useState(OWNER_EMAIL);
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -496,15 +495,14 @@ function BackupView({ records, user, reload }: { records: PrimerRecord[]; user: 
       setMessage(`已导入 ${migration.length} 条历史记录。`); setMigration([]); await reload();
     } finally { setBusy(false); }
   }
-  const isOwner = (!isSupabaseConfigured || Boolean(OWNER_EMAIL && user.email?.toLowerCase() === OWNER_EMAIL));
   return (
     <section className="page-section"><div className="page-heading"><div><p className="eyebrow">BACKUP & MIGRATION</p><h1>备份与迁移</h1><p>随时导出全部 Primer 数据。文件生成在浏览器本地，不上传备份副本。</p></div></div>
       <div className="backup-grid"><article><Download /><h2>Excel 备份</h2><p>包含序列、订购时间、酶切位点、模板结合坐标与备注。</p><button className="primary" onClick={exportXlsx}>导出 XLSX</button></article><article><Download /><h2>通用 CSV</h2><p>便于导入其他数据库或用脚本继续处理。</p><button onClick={exportCsv}>导出 CSV</button></article></div>
-      {isOwner && <div className="migration-panel"><p className="eyebrow">OWNER MIGRATION</p><h2>首次历史订单迁移</h2><p>选择保存历史订单的文件夹。系统只读取带日期的订单 `.xlsx`，自动忽略汇总表、临时文件和无日期文件。</p><input ref={directoryInput} type="file" multiple accept=".xlsx" onChange={(event) => scanHistory(event.target.files)} />
+      <div className="migration-panel"><p className="eyebrow">HISTORY MIGRATION</p><h2>首次历史订单迁移</h2><p>选择保存历史订单的文件夹。系统只读取带日期的订单 `.xlsx`，自动忽略汇总表、临时文件和无日期文件；导入结果仅写入当前账号。</p><input ref={directoryInput} type="file" multiple accept=".xlsx" onChange={(event) => scanHistory(event.target.files)} />
         <button onClick={() => directoryInput.current?.click()} disabled={busy}><Upload />{busy ? "正在读取…" : "选择历史订单文件夹"}</button>
         {message && <div className="status-banner"><Cloud />{message}</div>}
         {migration.length > 0 && <div className="migration-summary"><strong>{migration.length} 条待导入</strong><span>{new Set(migration.map((r) => r.normalized_sequence)).size} 个唯一序列</span><span>{migration.filter((r) => r.notes).length} 条重复序列备注</span><button className="primary" onClick={commitMigration} disabled={busy}>确认写入 {user.email}</button></div>}
-      </div>}
+      </div>
     </section>
   );
 }

@@ -21,12 +21,12 @@
 ## 上线清单
 
 - [ ] 创建 Supabase 项目并执行 `supabase/schema.sql`
-- [ ] 注册并验证所有者邮箱，并把它配置为 `VITE_OWNER_EMAIL`
+- [ ] 注册并验证用户邮箱
 - [ ] 创建 GitHub 仓库 `HC-PrimerHub`
-- [ ] 设置 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY` 与 `VITE_OWNER_EMAIL` 三个 Actions secrets
+- [ ] 设置 `VITE_SUPABASE_URL` 与 `VITE_SUPABASE_ANON_KEY` 两个 Actions secrets
 - [ ] 将 Pages Source 设为 GitHub Actions
 - [ ] 首次部署后把 Pages URL 加入 Supabase Redirect URLs
-- [ ] 所有者账号执行历史迁移并导出备份
+- [ ] 各用户可在自己的账号中执行历史迁移并导出备份
 
 ## 常用命令
 

@@ -16,7 +16,7 @@
 - 自动扫描常用限制性内切酶，保存酶名、识别序列、1-based 位置和链方向。
 - 上传任意 `.xlsx` 订购模板，自动识别表头；必要时手动映射一次并保存。支持模板默认规格、管数、纯化、修饰、交付和备注。
 - 由用户勾选新 Primer，生成并下载订单后立即写入 Primer 库。
-- 从历史订单文件夹批量迁移；仅环境变量指定的所有者账号显示迁移入口。
+- 每位登录用户都可从自己的历史订单文件夹批量迁移，导入数据按账号隔离。
 - 手工新增、编辑、删除，以及 Excel/CSV 备份。
 - 响应式界面和 PWA，可在电脑与手机浏览器中安装。
 
@@ -47,7 +47,6 @@ npm run dev
    ```env
    VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
    VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
-   VITE_OWNER_EMAIL=YOUR_LOGIN_EMAIL
    ```
 
 4. 在 Authentication → URL Configuration 中，把本地地址和最终 GitHub Pages 地址加入允许的 Redirect URLs。例如：
@@ -57,7 +56,7 @@ npm run dev
    https://YOUR_GITHUB_USER.github.io/HC-PrimerHub/
    ```
 
-5. 建议保留邮箱确认，并在正式迁移前先用所有者邮箱完成注册和验证。
+5. 建议保留邮箱确认；每位用户完成注册和验证后，都可以迁移自己的历史订单。
 
 ## 部署到 GitHub Pages
 
@@ -67,7 +66,6 @@ npm run dev
 2. 在仓库 Settings → Secrets and variables → Actions 添加：
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
-   - `VITE_OWNER_EMAIL`
 3. 在 Settings → Pages 中选择 Source: **GitHub Actions**。
 4. 重新运行 `Deploy HC PrimerHub to GitHub Pages` 工作流。
 
@@ -75,7 +73,7 @@ npm run dev
 
 ## 第一次使用
 
-1. 登录所有者账号。
+1. 登录自己的账号。
 2. 在“订购模板”上传自己的供应商 `.xlsx` 订单表，确认引物数据区的工作表、起始行和字段列；客户信息等上方内容无需单独设置，会保留在模板中。
 3. 在“备份与迁移”选择保存历史订单的文件夹。预览记录数后再确认写入。
 4. 在“导入与下单”选择 `.dna` 或 Primer 文本文件，或从 Primer 库选择需要再次合成的记录；检查结果后合并生成并下载订单。
