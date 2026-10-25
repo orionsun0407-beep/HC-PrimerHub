@@ -11,6 +11,20 @@ export const supabase = isSupabaseConfigured
     })
   : null;
 
+const syncRevisions = new Map<string, number>();
+async function syncMutation(userId: string, entity: string, id: string, payload: Record<string, unknown>, operation = "upsert") {
+  if (!supabase) throw new Error("Supabase 尚未配置");
+  const { data, error } = await supabase.rpc("hc_wb_apply", {
+    request_id: crypto.randomUUID(), entity_name: entity, record_id: id,
+    expected_revision: syncRevisions.get(`${entity}:${id}`) ?? 0,
+    operation, payload: { ...payload, id, user_id: userId },
+  });
+  if (error) throw new Error(`云端同步接口尚未升级或请求失败：${error.message}`);
+  if (data.status === "conflict") throw new Error("这条记录已在其他设备修改。请刷新列表、核对网站版本后再保存；本次没有覆盖云端数据。");
+  syncRevisions.set(`${entity}:${id}`, data.row.revision);
+  return data.row;
+}
+
 export async function getSession(): Promise<Session | null> {
   if (!supabase) return null;
   const { data, error } = await supabase.auth.getSession();
@@ -24,9 +38,11 @@ export async function loadPrimers(userId: string): Promise<PrimerRecord[]> {
     .from("primers")
     .select("*")
     .eq("user_id", userId)
+    .is("deleted_at", null)
     .order("ordered_at", { ascending: false })
     .order("created_at", { ascending: false });
   if (error) throw error;
+  for (const row of data ?? []) syncRevisions.set(`primers:${row.id}`, row.revision ?? 0);
   return (data ?? []) as PrimerRecord[];
 }
 
@@ -48,12 +64,9 @@ export async function insertPrimers(
     writeDemo("primers", [...inserted, ...current]);
     return inserted;
   }
-  const { data, error } = await supabase
-    .from("primers")
-    .insert(records.map((record) => ({ ...record, user_id: userId })))
-    .select("*");
-  if (error) throw error;
-  return (data ?? []) as PrimerRecord[];
+  const inserted: PrimerRecord[] = [];
+  for (const record of records) inserted.push(await syncMutation(userId, "primers", crypto.randomUUID(), record));
+  return inserted;
 }
 
 export async function updatePrimer(
@@ -66,8 +79,9 @@ export async function updatePrimer(
     writeDemo("primers", current.map((record) => record.id === primerId ? { ...record, ...patch, updated_at: new Date().toISOString() } : record));
     return;
   }
-  const { error } = await supabase.from("primers").update(patch).eq("id", primerId).eq("user_id", userId);
-  if (error) throw error;
+  const { data: current, error: readError } = await supabase.from("primers").select("*").eq("id", primerId).eq("user_id", userId).single();
+  if (readError) throw readError;
+  await syncMutation(userId, "primers", primerId, { ...current, ...patch });
 }
 
 export async function deletePrimer(userId: string, primerId: string): Promise<void> {
@@ -75,8 +89,7 @@ export async function deletePrimer(userId: string, primerId: string): Promise<vo
     writeDemo("primers", (await loadPrimers(userId)).filter((record) => record.id !== primerId));
     return;
   }
-  const { error } = await supabase.from("primers").delete().eq("id", primerId).eq("user_id", userId);
-  if (error) throw error;
+  await syncMutation(userId, "primers", primerId, {}, "delete");
 }
 
 export async function loadTemplates(userId: string): Promise<OrderTemplate[]> {
@@ -85,8 +98,10 @@ export async function loadTemplates(userId: string): Promise<OrderTemplate[]> {
     .from("order_templates")
     .select("*")
     .eq("user_id", userId)
+    .is("deleted_at", null)
     .order("updated_at", { ascending: false });
   if (error) throw error;
+  for (const row of data ?? []) syncRevisions.set(`order_templates:${row.id}`, row.revision ?? 0);
   return (data ?? []) as OrderTemplate[];
 }
 
@@ -112,16 +127,12 @@ export async function saveTemplate(
     contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
   if (uploadError) throw uploadError;
-  const { data, error } = await supabase
-    .from("order_templates")
-    .insert({ ...template, id, user_id: userId, storage_path: storagePath })
-    .select("*")
-    .single();
-  if (error) {
-    await supabase.storage.from("order-templates").remove([storagePath]);
+  try {
+    return await syncMutation(userId, "order_templates", id, { ...template, storage_path: storagePath }) as OrderTemplate;
+  } catch (error) {
+    // Keep the private file if the RPC response was lost after a successful commit.
     throw error;
   }
-  return data as OrderTemplate;
 }
 
 export async function downloadTemplateFile(template: OrderTemplate): Promise<ArrayBuffer> {
@@ -141,9 +152,8 @@ export async function removeTemplate(userId: string, template: OrderTemplate): P
     localStorage.removeItem(`primerhub:template-file:${template.id}`);
     return;
   }
-  const { error } = await supabase.from("order_templates").delete().eq("id", template.id).eq("user_id", userId);
-  if (error) throw error;
-  await supabase.storage.from("order-templates").remove([template.storage_path]);
+  await syncMutation(userId, "order_templates", template.id, {}, "delete");
+  // Immutable private files remain available for conflict resolution and historical evidence.
 }
 
 function readDemo<T>(key: string, fallback: T): T {
